@@ -2,16 +2,26 @@ import { useState, useRef, useEffect } from "react";
 import { sendMessage } from "../services/chatApi.js";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition.js";
 import { speakText } from "../hooks/useSpeechSynthesis.js";
+import { useChatHistory } from "../hooks/useChatHistory.js";
 
 function ChatWindow({ onClose }) {
-  const [messages, setMessages] = useState([
-    { role: "model", text: "Hi! I'm your AI assistant. Ask me anything, by typing or by voice." },
-  ]);
+  const {
+    sessions,
+    activeSessionId,
+    activeSession,
+    setActiveSessionId,
+    createNewChat,
+    updateActiveSession,
+    deleteSession,
+  } = useChatHistory();
+
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [voiceReplyEnabled, setVoiceReplyEnabled] = useState(true);
 
   const messagesEndRef = useRef(null);
+
+  const messages = activeSession?.messages || [];
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -34,19 +44,22 @@ function ChatWindow({ onClose }) {
     if (!text || isLoading) return;
 
     const historyBeforeThisMessage = buildHistory(messages);
-    const userMessage = { role: "user", text };
-    setMessages((prev) => [...prev, userMessage]);
+    const userMessage = { id: crypto.randomUUID(), role: "user", text };
+    
+    const newMessagesWithUser = [...messages, userMessage];
+    updateActiveSession(newMessagesWithUser);
+    
     setInput("");
     setIsLoading(true);
 
     try {
       const reply = await sendMessage(text, historyBeforeThisMessage);
-      setMessages((prev) => [...prev, { role: "model", text: reply }]);
+      updateActiveSession([...newMessagesWithUser, { id: crypto.randomUUID(), role: "model", text: reply }]);
       if (voiceReplyEnabled) speakText(reply);
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "model", text: "Sorry, I couldn't reach the server. Is it running?" },
+      updateActiveSession([
+        ...newMessagesWithUser,
+        { id: crypto.randomUUID(), role: "model", text: "Sorry, I couldn't reach the server. Is it running?" },
       ]);
     } finally {
       setIsLoading(false);
@@ -55,7 +68,6 @@ function ChatWindow({ onClose }) {
 
   const { startListening, isListening, isSupported } = useSpeechRecognition(
     (transcript) => {
-      setInput(transcript);
       handleSend(transcript);
     }
   );
@@ -64,57 +76,98 @@ function ChatWindow({ onClose }) {
     if (e.key === "Enter") handleSend();
   };
 
+  if (!activeSession) {
+    return null;
+  }
+
   return (
     <div className="chat-window">
-      <div className="chat-header">
-        <span>AI Assistant</span>
-        <button className="close-btn" onClick={onClose}>
-          ✕
-        </button>
+      {/* Sidebar for multiple sessions */}
+      <div className="chat-sidebar">
+        <div className="sidebar-header">
+          <button className="new-chat-btn" onClick={createNewChat} aria-label="New Chat">
+            + New Chat
+          </button>
+        </div>
+        <div className="session-list">
+          {sessions.map((session) => (
+            <div
+              key={session.id}
+              className={`session-item ${session.id === activeSessionId ? "active" : ""}`}
+              onClick={() => setActiveSessionId(session.id)}
+            >
+              <span className="session-title">{session.title}</span>
+              <button
+                className="delete-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (window.confirm("Delete this chat?")) {
+                    deleteSession(session.id);
+                  }
+                }}
+                title="Delete Chat"
+                aria-label="Delete Chat"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div className="chat-messages">
-        {messages.map((msg, i) => (
-          <div key={i} className={`chat-bubble ${msg.role}`}>
-            {msg.text}
-          </div>
-        ))}
-        {isLoading && <div className="chat-bubble model typing">Thinking...</div>}
-        <div ref={messagesEndRef} />
+      {/* Main chat area */}
+      <div className="chat-main">
+        <div className="chat-header">
+          <span> Campus AI Assistant</span>
+          <button className="close-btn" onClick={onClose} aria-label="Close Chat">
+            ✕
+          </button>
+        </div>
+
+        <div className="chat-messages">
+          {messages.map((msg, i) => (
+            <div key={msg.id || `msg-${i}`} className={`chat-bubble ${msg.role}`}>
+              {msg.text}
+            </div>
+          ))}
+          {isLoading && <div className="chat-bubble model typing">Thinking...</div>}
+          <div ref={messagesEndRef} />
+        </div>
+
+        <div className="chat-input-row">
+          <button
+            className={`mic-btn ${isListening ? "listening" : ""}`}
+            onClick={startListening}
+            title={isSupported ? "Speak your message" : "Voice input not supported in this browser"}
+            aria-label="Voice Input"
+            disabled={isLoading}
+          >
+            🎤
+          </button>
+
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={isListening ? "Listening..." : "Type your message..."}
+            disabled={isLoading}
+          />
+
+          <button className="send-btn" onClick={() => handleSend()} aria-label="Send Message" disabled={isLoading}>
+            Send
+          </button>
+        </div>
+
+        <label className="voice-toggle">
+          <input
+            type="checkbox"
+            checked={voiceReplyEnabled}
+            onChange={(e) => setVoiceReplyEnabled(e.target.checked)}
+          />
+          Read replies aloud
+        </label>
       </div>
-
-      <div className="chat-input-row">
-        <button
-          className={`mic-btn ${isListening ? "listening" : ""}`}
-          onClick={startListening}
-          title={isSupported ? "Speak your message" : "Voice input not supported in this browser"}
-          disabled={isLoading}
-        >
-          🎤
-        </button>
-
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={isListening ? "Listening..." : "Type your message..."}
-          disabled={isLoading}
-        />
-
-        <button className="send-btn" onClick={() => handleSend()} disabled={isLoading}>
-          Send
-        </button>
-      </div>
-
-      <label className="voice-toggle">
-        <input
-          type="checkbox"
-          checked={voiceReplyEnabled}
-          onChange={(e) => setVoiceReplyEnabled(e.target.checked)}
-        />
-        Read replies aloud
-      </label>
     </div>
   );
 }

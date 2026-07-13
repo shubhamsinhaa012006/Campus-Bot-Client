@@ -6,10 +6,15 @@ function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <>
-      <HeroSection onOpenChat={() => setIsOpen(true)} />
-      {isOpen && <ChatWindow onClose={() => setIsOpen(false)} />}
-    </>
+    <div className="chat-app">
+      {!isOpen && (
+        <HeroSection onOpenChat={() => setIsOpen(true)} />
+      )}
+
+      {isOpen && (
+        <ChatWindow onClose={() => setIsOpen(false)} />
+      )}
+    </div>
   );
 }
 

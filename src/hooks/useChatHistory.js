@@ -1,117 +1,124 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 
-const STORAGE_KEY = "campus-ai-chat-history";
+const STORAGE_KEY = "chat_history";
 
-const createDefaultSession = () => ({
-    id: Date.now().toString(),
-    title: "New Chat",
-    updatedAt: Date.now(),
-    messages: [
-        {
-            role: "model",
-            text: "Hi! I'm your AI assistant. Ask me anything, by typing or by voice.",
-        },
-    ],
-});
+const DEFAULT_MESSAGE = {
+  role: "model",
+  text: "Hi! I'm your AI assistant. Ask me anything, by typing or by voice.",
+};
 
-export default function useChatHistory() {
-    const [sessions, setSessions] = useState([]);
-    const [activeSessionId, setActiveSessionId] = useState(null);
-
-    // Load saved chats
-    useEffect(() => {
-        const saved = localStorage.getItem(STORAGE_KEY);
-
-        if (saved) {
-            const parsed = JSON.parse(saved);
-
-            if (parsed.length > 0) {
-                setSessions(parsed);
-                setActiveSessionId(parsed[0].id);
-                return;
-            }
+export function useChatHistory() {
+  const [sessions, setSessions] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
         }
-
-        const first = createDefaultSession();
-
-        setSessions([first]);
-        setActiveSessionId(first.id);
-    }, []);
-
-    // Save automatically
-    useEffect(() => {
-        if (sessions.length) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
-        }
-    }, [sessions]);
-
-    const activeSession = useMemo(() => {
-        return sessions.find((s) => s.id === activeSessionId);
-    }, [sessions, activeSessionId]);
-
-    function createSession() {
-        const session = createDefaultSession();
-
-        setSessions((prev) => [session, ...prev]);
-        setActiveSessionId(session.id);
+      } catch (e) {
+        console.error("Failed to load chat history from localStorage", e);
+        // Remove corrupted data so the app can recover automatically
+        localStorage.removeItem(STORAGE_KEY);
+      }
     }
+    // Default initial session
+    return [
+      {
+        id: crypto.randomUUID(),
+        title: "New Chat",
+        messages: [{ ...DEFAULT_MESSAGE }],
+        updatedAt: Date.now(),
+      }
+    ];
+  });
 
-    function updateMessages(messages) {
-        setSessions((prev) =>
-            prev
-                .map((session) => {
-                    if (session.id !== activeSessionId) return session;
+  const [activeSessionId, setActiveSessionId] = useState(null);
 
-                    let title = session.title;
-
-                    if (title === "New Chat") {
-                        const firstUser = messages.find((m) => m.role === "user");
-
-                        if (firstUser) {
-                            title =
-                                firstUser.text.length > 30
-                                    ? firstUser.text.substring(0, 30) + "..."
-                                    : firstUser.text;
-                        }
-                    }
-
-                    return {
-                        ...session,
-                        title,
-                        updatedAt: Date.now(),
-                        messages,
-                    };
-                })
-                .sort((a, b) => b.updatedAt - a.updatedAt)
-        );
+  useEffect(() => {
+    if (!activeSessionId && sessions.length > 0) {
+      setActiveSessionId(sessions[0].id);
     }
+  }, [sessions, activeSessionId]);
 
-    function deleteSession(id) {
-        const remaining = sessions.filter((s) => s.id !== id);
+  // Persist to localStorage whenever sessions change
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+  }, [sessions]);
 
-        if (!remaining.length) {
-            const session = createDefaultSession();
+  const sortedSessions = useMemo(() => {
+    return [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [sessions]);
 
-            setSessions([session]);
-            setActiveSessionId(session.id);
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
 
-            return;
-        }
-
-        setSessions(remaining);
-
-        if (activeSessionId === id) {
-            setActiveSessionId(remaining[0].id);
-        }
-    }
-
-    return {
-        sessions,
-        activeSession,
-        activeSessionId,
-        setActiveSessionId,
-        createSession,
-        updateMessages,
-        deleteSession,
+  const createNewChat = () => {
+    const newSession = {
+      id: crypto.randomUUID(),
+      title: "New Chat",
+      messages: [{ ...DEFAULT_MESSAGE }],
+      updatedAt: Date.now(),
     };
+    setSessions((prev) => [newSession, ...prev]);
+    setActiveSessionId(newSession.id);
+  };
+
+  const updateActiveSession = (newMessages) => {
+    setSessions((prev) =>
+      prev.map((session) => {
+        if (session.id === activeSessionId) {
+          let title = session.title;
+          // Automatically generate title from the first user message if it's still "New Chat"
+          if (title === "New Chat") {
+            const firstUserMessage = newMessages.find((m) => m.role === "user");
+            if (firstUserMessage) {
+              const text = firstUserMessage.text;
+              title = text.length > 30 ? text.substring(0, 30) + "..." : text;
+            }
+          }
+          return {
+            ...session,
+            messages: newMessages,
+            title,
+            updatedAt: Date.now(),
+          };
+        }
+        return session;
+      })
+    );
+  };
+
+  const deleteSession = (id) => {
+    setSessions((prev) => {
+      const remaining = prev.filter((s) => s.id !== id);
+      if (remaining.length === 0) {
+        // If the last conversation is deleted, automatically create a new one
+        const newSession = {
+          id: crypto.randomUUID(),
+          title: "New Chat",
+          messages: [{ ...DEFAULT_MESSAGE }],
+          updatedAt: Date.now(),
+        };
+        setActiveSessionId(newSession.id);
+        return [newSession];
+      }
+
+      if (id === activeSessionId) {
+        // Switch to the most recently updated remaining session
+        const nextActive = [...remaining].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        setActiveSessionId(nextActive.id);
+      }
+      return remaining;
+    });
+  };
+
+  return {
+    sessions: sortedSessions,
+    activeSessionId,
+    activeSession,
+    setActiveSessionId,
+    createNewChat,
+    updateActiveSession,
+    deleteSession,
+  };
 }
